@@ -11,10 +11,9 @@ from timeit import default_timer as timer
 help_text = """This command provides a lightweight alternative to qstat. Data
 are queried and updated every minute from the PBS job scheduler. Options not
 listed here will be forwarded to the scheduler. Please use those options
-sparingly. Job IDs, if provided, should be numeric only and space delimited. If
-a destination is provided, it should be a valid execution queue on the chosen
-server. This cached version of qstat does not allow mixed queries from multiple
-servers - only one server may be specified per request."""
+sparingly. If a destination is provided, it should be a valid execution queue
+on the chosen server.
+"""
 
 format_help = """This option allows you to provide a format string that
 specifies a custom set of fields to display, along with column widths. All
@@ -142,6 +141,9 @@ def read_config(path, pkg_root, server = "site"):
                     "temp"          : f"{pkg_root}/temp/{server}",
                     "logs"          : ""
                     },
+            "site"                  : {
+                    "name"          : "Site"
+                    },
             "cache"                 : {
                     "maxwait"       : "20",
                     "maxage"        : "300",
@@ -223,7 +225,7 @@ def get_server_info(config, server, source):
             print("{} cache has metadata errors. Bypassing cache...\n".format(source), file = sys.stderr)
             bypass_cache(config, "metadata", config["cache"]["agedelay"])
 
-def get_job_data(config, server, source, process_env = False, select_ids = None):
+def get_job_data(config, server, source, process_env = False, select_ids = None, select_filters = {}):
     get_server_info(config, server, source)
     data_path = "{}/{}-{}.dat".format(config["paths"]["data"], server, source)
     start_time = timer()
@@ -232,6 +234,7 @@ def get_job_data(config, server, source, process_env = False, select_ids = None)
         with open(data_path, "r", errors = "ignore") as data_file:
             try:
                 for line in data_file:
+                    yield_me = True
                     data = line.rstrip("\n").split("|-")
                     job_id = data[0].split(" ")[-1]
 
@@ -252,6 +255,17 @@ def get_job_data(config, server, source, process_env = False, select_ids = None)
                                 job_info[main_key][sub_key] = value
                             except KeyError:
                                 job_info[main_key] = {sub_key : value}
+
+                            if select_filters and sub_key == "select":
+                                chunks = [{i[0]:i[1] for i in [r.split("=") for r in c.split(":")[1:]]} for c in value.split("+")]
+
+                                for filter_key, filter_value in select_filters.items():
+                                    if any(chunk.get(filter_key, "") not in filter_value for chunk in chunks):
+                                        yield_me = False
+                                        break
+
+                                if not yield_me:
+                                    break
                         elif process_env and key == "Variable_List":
                             job_info[key] = {}
                             use_re = False
@@ -272,7 +286,8 @@ def get_job_data(config, server, source, process_env = False, select_ids = None)
                         else:
                             job_info[key] = value
 
-                    yield job_id, job_info
+                    if yield_me:
+                        yield job_id, job_info
 
                 break
             except FileNotFoundError:
@@ -306,13 +321,13 @@ def check_job(job_id, job_info, select_queue = None, filters = None, subjobs = [
 
     return True
 
-def process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, status):
+def process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, status, select_filters):
     jobs_found = False
 
     if ids:
         jobs = {job_id : None for job_id in ids}
 
-        for job_id, job_info in get_job_data(config, data_server, source, process_env, ids):
+        for job_id, job_info in get_job_data(config, data_server, source, process_env, ids, select_filters):
             if check_job(job_id, job_info, filters = args, subjobs = subjobs):
                 jobs[job_id] = job_info
 
@@ -326,7 +341,7 @@ def process_jobs(config, data_server, source, header, limit_user, args, ids, sub
         if source == "active" and not jobs_found:
             missing_ids = [job_id for job_id in ids if not jobs[job_id]]
 
-            for job_id, job_info in get_job_data(config, data_server, "history", process_env, missing_ids):
+            for job_id, job_info in get_job_data(config, data_server, "history", process_env, missing_ids, select_filters):
                 if check_job(job_id, job_info, filters = args, subjobs = subjobs):
                     jobs[job_id] = "history"
 
@@ -623,6 +638,17 @@ def main():
     # Prevent pipe interrupt errors
     signal(SIGPIPE,SIG_DFL)
 
+    # Get configuration information
+    try:
+        server = os.environ["QSCACHE_SERVER"]
+    except KeyError:
+        server = "site"
+
+    config = read_config("{}/cfg/{}.cfg".format(my_root, server), my_root, server)
+
+    if config["paths"]["logs"]:
+        config["run"]["log"] = "{}/{}-{}.log".format(config["paths"]["logs"], my_username, DT_NOW.strftime("%Y%m%d"))
+
     arg_dict = { "filters"      : "job IDs or queues",
                  "-1"           : "display node or comment information on job line",
                  "-a"           : "display all jobs (default unless -f specified)",
@@ -642,21 +668,35 @@ def main():
                  "-w"           : "use wide format output (120 columns)",
                  "-x"           : "all job records in recent history"    }
 
-    parser = argparse.ArgumentParser(prog = "qstat", description = help_text)
+    parser      = argparse.ArgumentParser(prog = "qstat", description = help_text)
+    pbs_group   = parser.add_argument_group("Supported Original Options")
+    cache_group = parser.add_argument_group("Cached Version Options")
 
     for arg in arg_dict:
         if arg == "filters":
-            parser.add_argument(arg, help = arg_dict[arg], nargs="*")
+            pbs_group.add_argument(arg, help = arg_dict[arg], nargs="*")
         elif arg == "-D":
-            parser.add_argument(arg, help = arg_dict[arg], default = "|", metavar = "DELIMITER")
+            pbs_group.add_argument(arg, help = arg_dict[arg], default = "|", metavar = "DELIMITER")
         elif arg == "-F":
-            parser.add_argument(arg, help = arg_dict[arg], choices = ["json", "dsv"])
+            pbs_group.add_argument(arg, help = arg_dict[arg], choices = ["json", "dsv"])
         elif arg in ["--status", "--format"]:
-            parser.add_argument(arg, help = arg_dict[arg])
+            cache_group.add_argument(arg, help = arg_dict[arg])
         elif arg in ["-u"]:
-            parser.add_argument(arg, help = arg_dict[arg], metavar = "USER")
+            pbs_group.add_argument(arg, help = arg_dict[arg], metavar = "USER")
+        elif "--" in arg:
+            cache_group.add_argument(arg, help = arg_dict[arg], action = "store_true")
         else:
-            parser.add_argument(arg, help = arg_dict[arg], action = "store_true")
+            pbs_group.add_argument(arg, help = arg_dict[arg], action = "store_true")
+
+    if "filters" in config:
+        site_group = parser.add_argument_group(f'Custom {config["site"]["name"]} Options')
+
+        for arg in config["filters"]:
+            try:
+                site_group.add_argument(f"--{arg}", help = config["filter_help"][arg])
+            except KeyError:
+                print(f"Warning: site filter {arg} has no help text from 'filter_help' key in config", file = sys.stderr)
+                site_group.add_argument(f"--{arg}", help = "Unknown custom option")
 
     args, unknown = parser.parse_known_args()
 
@@ -674,17 +714,6 @@ def main():
         sys.exit()
     elif args.format:
         args.format = process_custom_format(args.format)
-
-    # Get configuration information
-    try:
-        server = os.environ["QSCACHE_SERVER"]
-    except KeyError:
-        server = "site"
-
-    config = read_config("{}/cfg/{}.cfg".format(my_root, server), my_root, server)
-
-    if config["paths"]["logs"]:
-        config["run"]["log"] = "{}/{}-{}.log".format(config["paths"]["logs"], my_username, DT_NOW.strftime("%Y%m%d"))
 
     if "QSCACHE_BYPASS" in os.environ:
         bypass_cache(config, "manual")
@@ -704,6 +733,15 @@ def main():
 
     if args.H:
         args.status = "FMX"
+
+    # These arguments filter by select statement data and thus trigger additional processing
+    select_filters = {}
+
+    for arg in config["filters"]:
+        arg_value = getattr(args, arg)
+
+        if arg_value:
+            select_filters[config["filters"][arg]] = arg_value.split(",")
 
     if my_privilege not in ["all", "env"]:
         args.u = my_username
@@ -768,7 +806,7 @@ def main():
                 ft_pbs_server = host_pbs_server
 
             if ft_data_server != data_server:
-                my_status = process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, my_status)
+                my_status = process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, my_status, select_filters)
                 header, ids = not args.noheader, []
                 data_server = ft_data_server
 
@@ -782,17 +820,17 @@ def main():
                         subjobs.append(ids[-1])
             else:
                 if ids:
-                    my_status = process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, my_status)
+                    my_status = process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, my_status, select_filters)
                     header, ids = False, []
 
-                for job_id, job_info in get_job_data(config, data_server, source, process_env):
+                for job_id, job_info in get_job_data(config, data_server, source, process_env, select_filters = select_filters):
                     if check_job(job_id, job_info, select_queue = f"{ft_name}@{ft_pbs_server}", filters = args):
                         print_job(job_id, job_info, args, header, limit_user)
                         header = False
 
-        my_status = process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, my_status)
+        my_status = process_jobs(config, data_server, source, header, limit_user, args, ids, subjobs, process_env, my_status, select_filters)
     else:
-        for job_id, job_info in get_job_data(config, data_server, source, process_env):
+        for job_id, job_info in get_job_data(config, data_server, source, process_env, select_filters = select_filters):
             if check_job(job_id, job_info, select_queue = f"@{pbs_server}", filters = args):
                 print_job(job_id, job_info, args, header, limit_user)
                 header = False

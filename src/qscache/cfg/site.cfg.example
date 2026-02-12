@@ -12,6 +12,28 @@ Data = ${install_dir}/data
 # If blank, logging will be disabled
 Logs = ${install_dir}/test/logs
 
+[site]
+# A custom name for your site / system. Currently this is
+# only used for the section header of --help when custom
+# arguments are defined.
+name = Site
+
+[filters]
+# This section allows you to define a custom command-line
+# argument which allows the cache to filter jobs by user-
+# provided values of custom chunk resources. The argument
+# will be of the form "--key", so "--cpu" for the example
+# given below. The chunk resource searched for will be the
+# value, so "cpu_type" below. User input will be either a
+# single value or a comma-delimited inclusive list.
+cpu = cpu_type
+
+[filter_help]
+# If filters are provided above, this section is used to
+# define the argument help text. If this is not provided,
+# qstat will report a warning to the user.
+cpu = search for jobs with 1 or more chunks of cpu_type
+
 [cache]
 # The maximum wait time in seconds before the cache is
 # bypassed and the real qstat is called

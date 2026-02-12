@@ -18,34 +18,34 @@ usage: qstat [-h] [-1] [-a] [-D DELIMITER] [-f] [-F {json,dsv}]
 
 This command provides a lightweight alternative to qstat. Data are queried and
 updated every minute from the PBS job scheduler. Options not listed here will
-be forwarded to the scheduler. Please use those options sparingly. Job IDs, if
-provided, should be numeric only and space delimited. If a destination is
-provided, it should be a valid execution queue on the chosen server. This
-cached version of qstat does not allow mixed queries from multiple servers -
-only one server may be specified per request.
-
-positional arguments:
-  filters          job IDs or queues
+be forwarded to the scheduler. Please use those options sparingly. If a
+destination is provided, it should be a valid execution queue on the chosen
+server.
 
 options:
   -h, --help       show this help message and exit
+
+Supported Original Options:
+  filters          job IDs or queues
   -1               display node or comment information on job line
   -a               display all jobs (default unless -f specified)
   -D DELIMITER     specify a delimiter if using -Fdsv (default = '|')
   -f               display full output for a job
   -F {json,dsv}    full output (-f) in custom format
-  --format FORMAT  column output in custom format (=help for more)
   -H               all moved or finished jobs / specific job of any state
   -J               only show information for jobs (or subjobs with -t)
-  --noheader       disable labels (no header)
   -n               display a list of nodes at the end of the line
   -s               display administrator comment on the next line
-  --status STATUS  filter jobs by specific single-character status code
   -t               show information for both jobs and array subjobs
   -T               displays estimated start time for queued jobs
   -u USER          filter jobs by the submitting user
   -w               use wide format output (120 columns)
   -x               all job records in recent history
+
+Cached Version Options:
+  --format FORMAT  column output in custom format (=help for more)
+  --noheader       disable labels (no header)
+  --status STATUS  filter jobs by specific single-character status code
 ```
 
 ## Installation
@@ -94,6 +94,28 @@ Data = ${install_dir}/data
 #   that records calls to qstat along with arguments
 # If blank, logging will be disabled
 Logs = ${install_dir}/test/logs
+
+[site]
+# A custom name for your site / system. Currently this is
+# only used for the section header of --help when custom
+# arguments are defined.
+name = Site
+
+[filters]
+# This section allows you to define a custom command-line
+# argument which allows the cache to filter jobs by user-
+# provided values of custom chunk resources. The argument
+# will be of the form "--key", so "--cpu" for the example
+# given below. The chunk resource searched for will be the
+# value, so "cpu_type" below. User input will be either a
+# single value or a comma-delimited inclusive list.
+cpu = cpu_type
+
+[filter_help]
+# If filters are provided above, this section is used to
+# define the argument help text. If this is not provided,
+# qstat will report a warning to the user.
+cpu = search for jobs with 1 or more chunks of cpu_type
 
 [cache]
 # The maximum wait time in seconds before the cache is
