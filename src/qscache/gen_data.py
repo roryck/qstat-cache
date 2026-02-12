@@ -52,7 +52,6 @@ def run_cache_cycle(config, server, cycle = "active"):
         hf.write(socket.gethostname())
 
     cycle_temp = "{}/qscache-{}".format(config["paths"]["temp"], config["run"]["pid"])
-    cycle_file = f"{cycle_temp}/{cycle}"
 
     with open(pid_file, "w") as pf:
         pf.write(config["run"]["pid"])
@@ -66,14 +65,13 @@ def run_cache_cycle(config, server, cycle = "active"):
     if cycle == "history":
         pbs_args.append("-x")
 
-    with open(cycle_file, "w") as tf:
+    with open(f"{cycle_temp}/{cycle}", "w") as tf:
         if config["pbs"]["prefix"]:
             subprocess.run("{} {}".format(config["pbs"]["prefix"], " ".join(pbs_args)), shell = True, stdout = tf)
         else:
             subprocess.run(pbs_args, stdout = tf)
 
-
-    with open(f"{cycle_file}.age", "w") as uf:
+    with open(f"{cycle_temp}/{cycle}.age", "w") as uf:
         if config["pbs"]["prefix"]:
             subprocess.run("{} {}".format(config["pbs"]["prefix"], " ".join(pbs_time)), shell = True, stdout = uf, stderr = subprocess.DEVNULL)
         else:
@@ -84,17 +82,10 @@ def run_cache_cycle(config, server, cycle = "active"):
 
         with open(config["run"]["log"], "a") as lf:
             cycle_time = timer() - cycle_time
-            lf.write("{:10} cycle={:9} type={:7} size={:6.1f}{} {:>10.2f} seconds\n".format(timestamp, config["run"]["pid"], cycle, file_size, file_units cycle_time))
+            lf.write("{:10} cycle={:9} type={:7} {:>10.2f} seconds\n".format(timestamp, config["run"]["pid"], cycle, cycle_time))
 
-    file_size = os.stat(cycle_file).st_size / 1024**2
-    file_units = "MB"
-
-    if file_size >=1024:
-        file_size = file_size / 1024
-        file_units = "GB"
-
-    shutil.move(cycle_file, "{}/{}-{}.dat".format(config["paths"]["data"], server, cycle))
-    shutil.move(f"{cycle_file}.age", "{}/{}-{}.age".format(config["paths"]["data"], server, cycle))
+    shutil.move(f"{cycle_temp}/{cycle}", "{}/{}-{}.dat".format(config["paths"]["data"], server, cycle))
+    shutil.move(f"{cycle_temp}/{cycle}.age", "{}/{}-{}.age".format(config["paths"]["data"], server, cycle))
 
     try:
         os.remove(pid_file)
