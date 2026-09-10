@@ -225,6 +225,35 @@ def get_server_info(config, server, source):
             print("{} cache has metadata errors. Bypassing cache...\n".format(source), file = sys.stderr)
             bypass_cache(config, "metadata", config["cache"]["agedelay"])
 
+def split_env_list(value):
+    """Split a Variable_List value on the commas that separate variables.
+
+    PBS escapes a comma occurring inside a value, so a comma preceded by a
+    backslash belongs to that value. The length of the backslash run cannot
+    tell an escaped comma from a value ending in literal backslashes -- the
+    encoding differs by submission path -- so any backslash before a comma
+    keeps it joined. Rejoining the result with commas therefore reproduces
+    the input exactly, and no part of a value can be dropped.
+    """
+    entries = value.split(",")
+
+    if "\\," not in value:
+        return entries
+
+    joined = []
+    pieces = [entries[0]]
+
+    for entry in entries[1:]:
+        if pieces[-1].endswith("\\"):
+            pieces += [",", entry]
+        else:
+            joined.append("".join(pieces))
+            pieces = [entry]
+
+    joined.append("".join(pieces))
+
+    return joined
+
 def get_job_data(config, server, source, process_env = False, select_ids = None, select_filters = {}):
     get_server_info(config, server, source)
     data_path = "{}/{}-{}.dat".format(config["paths"]["data"], server, source)
@@ -268,30 +297,8 @@ def get_job_data(config, server, source, process_env = False, select_ids = None,
                                     break
                         elif process_env and key == "Variable_List":
                             env_vars = {}
-                            entries = value.split(",")
 
-                            # PBS escapes a comma within a value as exactly one
-                            # backslash, so a longer run means the backslashes
-                            # are part of the value and the comma separates
-                            # variables. Only walk the entries when one of
-                            # those escapes is actually present.
-                            if "\\," in value:
-                                stitched = []
-                                pieces = [entries[0]]
-
-                                for entry in entries[1:]:
-                                    previous = pieces[-1]
-
-                                    if len(previous) - len(previous.rstrip("\\")) == 1:
-                                        pieces += [",", entry]
-                                    else:
-                                        stitched.append("".join(pieces))
-                                        pieces = [entry]
-
-                                stitched.append("".join(pieces))
-                                entries = stitched
-
-                            for env_var in entries:
+                            for env_var in split_env_list(value):
                                 ek, sep, ev = env_var.partition("=")
 
                                 # Skip a malformed entry rather than abandon
