@@ -267,22 +267,39 @@ def get_job_data(config, server, source, process_env = False, select_ids = None,
                                 if not yield_me:
                                     break
                         elif process_env and key == "Variable_List":
-                            job_info[key] = {}
-                            use_re = False
+                            env_vars = {}
+                            entries = value.split(",")
 
-                            # Try to avoid using lookback-expression, as it is expensive!
-                            for env_var in value.split(","):
-                                try:
-                                    ek, ev = env_var.split("=", maxsplit = 1)
-                                    job_info[key][ek] = ev
-                                except ValueError:
-                                    use_re = True
-                                    break
+                            # PBS escapes a comma within a value as exactly one
+                            # backslash, so a longer run means the backslashes
+                            # are part of the value and the comma separates
+                            # variables. Only walk the entries when one of
+                            # those escapes is actually present.
+                            if "\\," in value:
+                                stitched = []
+                                pieces = [entries[0]]
 
-                            if use_re:
-                                for env_var in re.split(r"(?<!\\),", value):
-                                    ek, ev = env_var.split("=", maxsplit = 1)
-                                    job_info[key][ek] = ev
+                                for entry in entries[1:]:
+                                    previous = pieces[-1]
+
+                                    if len(previous) - len(previous.rstrip("\\")) == 1:
+                                        pieces += [",", entry]
+                                    else:
+                                        stitched.append("".join(pieces))
+                                        pieces = [entry]
+
+                                stitched.append("".join(pieces))
+                                entries = stitched
+
+                            for env_var in entries:
+                                ek, sep, ev = env_var.partition("=")
+
+                                # Skip a malformed entry rather than abandon
+                                # the whole listing
+                                if sep:
+                                    env_vars[ek] = ev
+
+                            job_info[key] = env_vars
                         else:
                             job_info[key] = value
 
@@ -555,6 +572,7 @@ def full_output(job_id, job_info, wide):
         else:
             if field == "Variable_List":
                 first_line = True
+                line = "{} = ".format(field)
 
                 for subfield in job_info[field]:
                     try:
